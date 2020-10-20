@@ -12,7 +12,6 @@ function veracryptismounted () {
 		printf >&2 '%s: %s is not a file\n' "${FUNCNAME[0]}" "${_FILE}"
 		return 1
 	fi
-	local _INDEX _CRYPTFILE _MAPPERDEV _MOUNTPOINT
 	veracrypt &>/dev/null -t -l "${_FILE}"
 	return $?
 }
@@ -23,15 +22,13 @@ function veracryptkeyfile () {
 		printf >&2 '%s: %s <VOLUME>\n' "${FUNCNAME[0]}" "${FUNCNAME[0]}"
 		return 1
 	fi
-	# /path/to/VOLUME.hc -> NAME
 	local _KEYFILE="${_VOLUME##*/}"
-	printf -v _KEYFILE '%s/%s' "${VERACRYPT[KEYFILES]}" "${_KEYFILE%.hc}.key"
+	printf -v _KEYFILE '%s/%s.key' "${VERACRYPT[KEYFILES]}" "${_KEYFILE%.hc}"
 	printf '%s\n' "${_KEYFILE}"
-	return 0
 }
 # VOLUME to ${VERACRYPT[MOUNTPOINT]}/${_NAME}
 function veracryptmountpoint () {
-	local _VOLUME="${1}" _MOUNTPOINT
+	local _VOLUME="${1}"
 	if [ -z "${_VOLUME}" ]; then
 		printf >&2 '%s: %s <VOLUME>\n' "${FUNCNAME[0]}" "${FUNCNAME[0]}"
 		return 1
@@ -39,7 +36,6 @@ function veracryptmountpoint () {
 	local _MOUNTPOINT="${_VOLUME##*/}"
 	printf -v _MOUNTPOINT '%s/%s' "${VERACRYPT[MOUNTPOINT]}" "${_MOUNTPOINT%.hc}"
 	printf '%s\n' "${_MOUNTPOINT}"
-	return 0
 }
 # veracryptvolumes
 # List volumes in ${VERACRYPT[VOLUMES]}
@@ -74,7 +70,7 @@ function veracryptmount () {
 				continue
 			fi
 		fi
-		# Got _KEYFILE _MOUNT
+		# Got _VOLUME _KEYFILE _MOUNTPOINT
 		if veracryptismounted "${_VOLUME}"; then
 			printf >&2 '%s: %s already mounted\n' "${FUNCNAME[0]}" "${_VOLUME}"
 			continue
@@ -101,7 +97,6 @@ function veracryptbusy () {
 	done < <(find 2>/dev/null /run -name gvfs )
 	_LSOFCMD="${_LSOFCMD% }"
 	printf -v _LSOFCMD 'lsof %s +f -- %s' "${_LSOFCMD}" "${_DEV}"
-	#printf '%s\n' "${_LSOFCMD}"
 	$_LSOFCMD
 	return $?
 }
@@ -109,7 +104,7 @@ function veracryptbusy () {
 # Unounts each _VOLUME found in ${VERACRYPT[VOLUMES]}
 function veracryptunmount () {
 	set -- $(veracryptvolumes)
-	local _INDEX _VOLFILE _MAPPERDEV _MOUNTOINT _ERRNO
+	local _INDEX _VOLFILE _MAPPERDEV _MOUNTPOINT _ERRNO _UNMOUNTCMD
 	for _VOLUME; do
 		if ! veracryptismounted "${_VOLUME}"; then
 			continue
@@ -129,14 +124,10 @@ function veracryptunmount () {
 		fi
 	done
 }
-# veracryptvolume
-# Get all _VOLUME files
-function veracryptvolume () {
-	find ${VERACRYPT[VOLUMES]//,/ } -mindepth 1 -maxdepth 1 -type f -name '*.hc'
-}
 # veracryptgetwritablevoldir
 # Find dir in comma-delimited ${VERACRYPT[VOLUMES]} having >${VERACRYPT[VOLSIZE]}GB available
 function veracryptgetwritablevoldir () {
+	local _VOLDIR _AVAIL
 	for _VOLDIR in ${VERACRYPT[VOLUMES]//,/ }; do
 		printf -v _AVAIL '%s' $(df -BG --output=avail "${_VOLDIR}" | tail -n +2)
 		if [ -z "${_AVAIL}" ]; then
@@ -150,7 +141,6 @@ function veracryptgetwritablevoldir () {
 		fi
 		printf '%s\n' "${_VOLDIR}"
 	done
-
 }
 # veracryptcreate <PROJECTNAME>
 # Write _KEYFILE to ${VERACRYPT[KEYFILES]}
@@ -163,7 +153,7 @@ function veracryptcreate () {
 	fi
 	# Get directory with at least 100G free space
 	local _VOLDIR
-	printf -v _VOLDIR $(veracryptgetwritablevoldir)
+	printf -v _VOLDIR "$(veracryptgetwritablevoldir)"
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: Error enumerating writable directory\n' "${FUNCNAME[0]}"
 		return 1
@@ -173,7 +163,7 @@ function veracryptcreate () {
 	# _VOLUME/_KEYFILE
 	local _VOLUME _KEYFILE
 	printf -v _VOLUME '%s/%s.hc' "${_VOLDIR}" "${_PROJECT}"
-	printf -v _KEYFILE '%s' $(veracryptkeyfile "${_VOLUME}")
+	printf -v _KEYFILE '%s' "$(veracryptkeyfile ${_VOLUME})"
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
 		return 2
@@ -195,10 +185,10 @@ function veracryptcreate () {
 	printf -v _MKVOL 'veracrypt -t -c --volume-type=normal --encryption=aes --hash=sha-512 --filesystem=ext4 --pim=0 --size=%dG -k %s -p "" %s' "${VERACRYPT[VOLSIZE]}" "${_KEYFILE}" "${_VOLUME}"
 	printf '%s\n' "${_MKVOL}"
 	# The stdin will satisfy "Please type at least 320 randomly chosen characters and then press Enter:"
-	dd status=none if=/dev/random of=/dev/stdout bs=1 count=10000 | grep -oa '[0-9a-zA-Z]' | tr -d '\n' | head -c320 | cat - <(printf '\n') | \
-		$_MKVOL
+	RANDCHARS=$(dd status=none if=/dev/random of=/dev/stdout bs=1 count=10000 | grep -oa '[0-9a-zA-Z]' | tr -d '\n' | head -c320 | cat - <(printf '\n'))
+	printf '%s' "${RANDCHARS}" | $_MKVOL
 	if [ "$?" != "0" ]; then
-		printf '\n%s: Error, rolling back\n' "${FUNCNAME[0]}"
+		printf >&2 '\n%s: Error, rolling back\n' "${FUNCNAME[0]}"
 		rm -v "${_KEYFILE}" "${_VOLUME}"
 		return 5
 	fi
