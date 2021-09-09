@@ -7,12 +7,12 @@ declare -A VERACRYPT=(
 )
 # veracryptismounted <VOLUME>
 function veracryptismounted () {
-	local _FILE="${1}"
-	if ! [ -f "${_FILE}" ]; then
-		printf >&2 '%s: %s is not a file\n' "${FUNCNAME[0]}" "${_FILE}"
+	local _VOLUME="${1}"
+	if ! [ -f "${_VOLUME}" ]; then
+		printf >&2 '%s: %s is not a file\n' "${FUNCNAME[0]}" "${_VOLUME}"
 		return 1
 	fi
-	veracrypt &>/dev/null -t -l "${_FILE}"
+	veracrypt &>/dev/null -t -l "${_VOLUME}"
 	return $?
 }
 # _VOLUME to _KEYFILE: ${VERACRYPT[KEYFILES]}/${_VOLUME%.hc}.key
@@ -65,7 +65,7 @@ function veracryptmount () {
 		# Create _MOUNTPOINT if it does not exist
 		if [ ! -d "${_MOUNTPOINT}" ]; then
 			mkdir -pv "${_MOUNTPOINT}"
-			if [ $? != "0" ]; then
+			if [ $? -ne 0 ]; then
 				printf >&2 '%s: Mountpoint directory does not exist %s, error creating it\n' "${FUNCNAME[0]}" "${_MOUNTPOINT}"
 				continue
 			fi
@@ -158,6 +158,7 @@ function veracryptgetwritablevoldir () {
 		fi
 		_AVAIL="${_AVAIL%G}"
 		if [ $_AVAIL -lt ${VERACRYPT[VOLSIZE]} ]; then
+			printf >&2 '%s: %dGB needed for volume but %s has %dGB left\n' "${FUNCNAME[0]}" "${VERACRYPT[VOLSIZE]}" "${_VOLDIR}" "${_AVAIL}"
 			continue
 		fi
 		printf '%s\n' "${_VOLDIR}"
@@ -169,15 +170,14 @@ function veracryptgetwritablevoldir () {
 # Write _KEYFILE to ${VERACRYPT[KEYFILES]}
 # Write _VOLUME to ${VERACRYPT[VOLUME]}
 function veracryptcreate () {
-	local _PROJECT="${1}"
+	local _PROJECT="${1}" _VOLDIR
 	if [ "${_PROJECT//[a-zA-Z0-9-_]}" = "${_PROJECT}" ]; then
 		printf >&2 '%s: Need project name\n' "${FUNCNAME[0]}"
 		return 1
 	fi
-	local _VOLDIR
-	printf -v _VOLDIR "$(veracryptgetwritablevoldir)"
+	_VOLDIR="$(veracryptgetwritablevoldir)"
 	if [ $? -ne 0 ]; then
-		printf >&2 '%s: Error enumerating writable directory\n' "${FUNCNAME[0]}"
+		printf >&2 '%s: No storage directory satisfied needs (%s)\n' "${FUNCNAME[0]}" "${VERACRYPT[VOLUMES]}"
 		return 1
 	elif [ ! -d "${_VOLDIR}" ]; then
 		printf >&2 '%s: Writable directory "%s" not a directory\n' "${FUNCNAME[0]}" "${_VOLDIR}"
