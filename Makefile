@@ -1,5 +1,9 @@
-DOT=/.../linux/sh/d/bashrc.d/668-veracrypt.sh
-link = ln -svf ${PWD}/veracrypt.sh ${DOT}
+bin = /usr/local/bin/vera
+# This is not the normal directory for bash completion
+completion = /etc/bash_completion.d/vera
 all:
-	$(link)
-# ln -svf ${PWD}/veracrypt.sh /.../linux/sh/d/bashrc.d/668-veracrypt.sh
+	ln -svf ${PWD}/vera.sh ${bin}
+	ln -svf ${PWD}/completion.sh ${completion}
+	chmod -v +x ${PWD}/vera.sh ${PWD}/completion.sh
+clean:
+	rm -vf ${bin} ${completion}

@@ -1,10 +1,14 @@
-#!/bin/sh
+#!/usr/bin/env bash
+if [[ "${BASH_SOURCE[0]}" = "${0}" ]]; then
+	exit 1
+fi
 declare -A VERACRYPT=(
 	["VOLUMES"]="/data/vera,/data3/vera,/data4/vera"
 	["KEYFILES"]="/.../secrets/veracrypt"
 	["MOUNTPOINT"]="/mnt"
 	["VOLSIZE"]="$((50*1024))"
 )
+declare -a _CMDS=("mount" "unmount" "shrink" "mv" "rm" "create" "ls")
 # veracryptismounted <_VOLUME>
 function veracryptismounted () {
 	local _VOLUME="${1}"
@@ -42,6 +46,15 @@ function veracryptmountpoint () {
 # List volumes in ${VERACRYPT[VOLUMES]}
 function veracryptvolumes () {
 	find ${VERACRYPT[VOLUMES]//,/ } -mindepth 1 -maxdepth 1 -type f -name '*.hc' 2>/dev/null
+}
+# veracryptprojects
+# List projects
+function veracryptprojects () {
+	while read -r; do
+		REPLY="${REPLY##*/}"
+		REPLY="${REPLY%.hc}"
+		printf '%s\n' "${REPLY}"
+	done < <(veracryptvolumes)
 }
 # veracryptmountall
 # Mount each _VOLUME found in ${VERACRYPT[VOLUMES]}
