@@ -3,13 +3,13 @@ declare -A VERACRYPT=(
 	["VOLUMES"]="/data/vera,/data3/vera,/data4/vera"
 	["KEYFILES"]="/.../secrets/veracrypt"
 	["MOUNTPOINT"]="/mnt"
-	["VOLSIZE"]="50"
+	["VOLSIZE"]="$((50*1024))"
 )
-# veracryptismounted <VOLUME>
+# veracryptismounted <_VOLUME>
 function veracryptismounted () {
 	local _VOLUME="${1}"
-	if ! [ -f "${_VOLUME}" ]; then
-		printf >&2 '%s: %s is not a file\n' "${FUNCNAME[0]}" "${_VOLUME}"
+	if [ ! -f "${_VOLUME}" ]; then
+		printf >&2 '%s: %s is not a file (from %s)\n' "${FUNCNAME[0]}" "${_VOLUME}" "${FUNCNAME[1]}"
 		return 1
 	fi
 	veracrypt &>/dev/null -t -l "${_VOLUME}"
@@ -26,6 +26,7 @@ function veracryptkeyfile () {
 	printf -v _KEYFILE '%s/%s.key' "${VERACRYPT[KEYFILES]}" "${_KEYFILE%.hc}"
 	printf '%s\n' "${_KEYFILE}"
 }
+# veracryptmountpoint <_VOLUME>
 # VOLUME to ${VERACRYPT[MOUNTPOINT]}/${_NAME}
 function veracryptmountpoint () {
 	local _VOLUME="${1}"
@@ -34,7 +35,7 @@ function veracryptmountpoint () {
 		return 1
 	fi
 	local _MOUNTPOINT="${_VOLUME##*/}"
-	printf -v _MOUNTPOINT '%s/%s' "${VERACRYPT[MOUNTPOINT]}" "${_MOUNTPOINT%.hc}"
+	printf -v _MOUNTPOINT '%s/%s/' "${VERACRYPT[MOUNTPOINT]}" "${_MOUNTPOINT%.hc}"
 	printf '%s\n' "${_MOUNTPOINT}"
 }
 # veracryptvolumes
@@ -42,44 +43,89 @@ function veracryptmountpoint () {
 function veracryptvolumes () {
 	find ${VERACRYPT[VOLUMES]//,/ } -mindepth 1 -maxdepth 1 -type f -name '*.hc' 2>/dev/null
 }
-# veracryptmount
-# Mounts each _VOLUME found in ${VERACRYPT[VOLUMES]}
-function veracryptmount () {
+# veracryptmountall
+# Mount each _VOLUME found in ${VERACRYPT[VOLUMES]}
+function veracryptmountall () {
 	local _VOLUME _KEYFILE _MOUNTPOINT _MOUNTCMD
 	set -- $(veracryptvolumes)
 	for _VOLUME; do
-		# Get _KEYFILE
-		printf -v _KEYFILE '%s' $(veracryptkeyfile "${_VOLUME}")
-		if [ $? -ne 0 ]; then
-			printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
-			continue
-		elif [ ! -f "${_KEYFILE}" ]; then
-			printf >&2 '%s: Keyfile "%s" does not exist\n' "${FUNCNAME[0]}" "${_KEYFILE}"
-			continue
-		fi
-		# Get _MOUNTPOINT
-		printf -v _MOUNTPOINT '%s' $(veracryptmountpoint "${_VOLUME}")
-		if [ $? -ne 0 ]; then
-			printf >&2 '%s: Could not obtain mountpoint "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_MOUNTPOINT}" "${_VOLUME}"
-		fi
-		# Create _MOUNTPOINT if it does not exist
-		if [ ! -d "${_MOUNTPOINT}" ]; then
-			mkdir -pv "${_MOUNTPOINT}"
-			if [ $? -ne 0 ]; then
-				printf >&2 '%s: Mountpoint directory does not exist %s, error creating it\n' "${FUNCNAME[0]}" "${_MOUNTPOINT}"
-				continue
-			fi
-		fi
-		# Got _VOLUME _KEYFILE _MOUNTPOINT
-		if veracryptismounted "${_VOLUME}"; then
-			#printf >&2 '%s: %s already mounted\n' "${FUNCNAME[0]}" "${_VOLUME}"
-			continue
-		fi
-		printf '%s: _VOLUME=%s; _KEYFILE=%s _MOUNTPOINT=%s\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}" "${_MOUNTPOINT}"
-		printf -v _MOUNTCMD 'veracrypt -t --non-interactive --mount %s -k %s %s' "${_VOLUME}" "${_KEYFILE}" "${_MOUNTPOINT}"
-		#printf '%s: %s\n' "${FUNCNAME[0]}" "${_MOUNTCMD}"
-		$_MOUNTCMD
+		veracryptmountvolume "${_VOLUME}"
 	done
+}
+# veracryptmountvolume <_VOLUME>
+# Mounts _VOLUME
+function veracryptmountvolume () {
+	local _VOLUME="${1}" _KEYFILE _MOUNTPOINT _MOUNTCMD
+	if veracryptismounted "${_VOLUME}"; then
+		return 0
+	fi
+	_KEYFILE=$(veracryptkeyfile "${_VOLUME}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
+		return 1
+	elif [ ! -f "${_KEYFILE}" ]; then
+		printf >&2 '%s: Keyfile "%s" does not exist\n' "${FUNCNAME[0]}" "${_KEYFILE}"
+		return 2
+	elif [ ! -s "${_KEYFILE}" ]; then
+		printf >&2 '%s: Keyfile %s was empty (perms?)\n' "${FUNCNAME[0]}" "${_KEYFILE}"
+		return 3
+	fi
+	_MOUNTPOINT=$(veracryptmountpoint "${_VOLUME}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not get mountpoint for %s\n' "${FUNCNAME[0]}" "${_VOLUME}"
+		return 4
+	elif [ ! -d "${_MOUNTPOINT}" ]; then
+		mkdir -pv "${_MOUNTPOINT}"
+		if [ $? -ne 0 ]; then
+			printf >&2 '%s: Mountpoint directory does not exist %s, error creating it\n' "${FUNCNAME[0]}" "${_MOUNTPOINT}"
+			return 5
+		fi
+	fi
+	printf '%s: _VOLUME=%s; _KEYFILE=%s _MOUNTPOINT=%s\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}" "${_MOUNTPOINT}"
+	printf -v _MOUNTCMD 'veracrypt -t --non-interactive --mount %s -k %s %s' "${_VOLUME}" "${_KEYFILE}" "${_MOUNTPOINT}"
+	$_MOUNTCMD
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Mount command error: %s\n' "${FUNCNAME[0]}" "${_MOUNTCMD}"
+		return 6
+	fi
+}
+# _getVolume <_PROJECT|_VOLUME>
+function _getVolume () {
+	local _VOLUME
+	# Absolute
+	if [ "${1:0:1}" = "/" ]; then
+		printf '%s\n' "${1}"
+		return 0
+	fi
+	# Project name
+	_VOLUME=$(_getVolumeByProject "${1}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: No volume associated with %s\n' "${FUNCNAME[0]}" "${1}"
+		return 1
+	fi
+	printf '%s\n' "${_VOLUME}"
+}
+
+# veracryptmount <_PROJECT|_VOLUME|>
+# Mount _VOLUME associated with project
+# Or mount _VOLUME
+# When _PROJECT is empty, mount all
+function veracryptmount () {
+	local _VOLUME
+	if [ -z "${1}" ]; then
+		veracryptmountall
+		return $?
+	fi
+	_VOLUME=$(_getVolume "${1}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${1}"
+		return 1
+	fi
+	veracryptmountvolume "${_VOLUME}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not mount %s\n' "${_VOLUME}"
+		return 2
+	fi
 }
 # veracryptbusy <DEV>
 # Uses lsof to see if volume is busy
@@ -96,13 +142,14 @@ function veracryptbusy () {
 		printf -v _LSOFCMD '%s-e %s ' "${_LSOFCMD}" "${REPLY}"
 	done < <(find 2>/dev/null /run -name gvfs )
 	_LSOFCMD="${_LSOFCMD% }"
+	# TODO: lsof is dependency
 	printf -v _LSOFCMD 'lsof %s +f -- %s' "${_LSOFCMD}" "${_DEV}"
 	$_LSOFCMD
 	return $?
 }
-# veracryptunmount
+# veracryptunmountall
 # Unounts each _VOLUME found in ${VERACRYPT[VOLUMES]}
-function veracryptunmount () {
+function veracryptunmountall () {
 	set -- $(veracryptvolumes)
 	local _ERRNO
 	for _VOLUME; do
@@ -143,22 +190,38 @@ function veracryptunmountvolume () {
 		return 1
 	fi
 }
+# veracryptunmount <_PROJECT|_VOLUME|>
+function veracryptunmount () {
+	local _VOLUME
+	if [ -z "${1}" ]; then
+		veracryptunmountall
+		return $?
+	fi
+	_VOLUME=$(_getVolume "${1}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${1}"
+		return 1
+	fi
+	veracryptunmountvolume "${_VOLUME}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not mount %s\n' "${_VOLUME}"
+		return 2
+	fi
+}
 # veracryptgetwritablevoldir
-# Find dir in comma-delimited ${VERACRYPT[VOLUMES]} having >${VERACRYPT[VOLSIZE]}GB available
+# Find dir in comma-delimited ${VERACRYPT[VOLUMES]} having >${VERACRYPT[VOLSIZE]}MB available
 function veracryptgetwritablevoldir () {
 	local _VOLDIR _AVAIL
 	for _VOLDIR in ${VERACRYPT[VOLUMES]//,/ }; do
 		if [ ! -d "${_VOLDIR}" ]; then
 			continue
 		fi
-		printf -v _AVAIL '%s' $(df -BG --output=avail "${_VOLDIR}" | tail -n +2)
-		if [ -z "${_AVAIL}" ]; then
+		_AVAIL=$(_getDiskSpaceAvail "${_VOLDIR}")
+		if [ $? -ne 0 ] || [ -z "${_AVAIL}" ]; then
 			printf >&2 '%s: Failed to get available space for volume directory %s\n' "${FUNCNAME[0]}" "${_VOLDIR}"
 			return 1
-		fi
-		_AVAIL="${_AVAIL%G}"
-		if [ $_AVAIL -lt ${VERACRYPT[VOLSIZE]} ]; then
-			printf >&2 '%s: %dGB needed for volume but %s has %dGB left\n' "${FUNCNAME[0]}" "${VERACRYPT[VOLSIZE]}" "${_VOLDIR}" "${_AVAIL}"
+		elif [ $_AVAIL -lt ${VERACRYPT[VOLSIZE]} ]; then
+			printf >&2 '%s: %dMB needed for volume but %s has %dMB available\n' "${FUNCNAME[0]}" "${VERACRYPT[VOLSIZE]}" "${_VOLDIR}" "${_AVAIL}"
 			continue
 		fi
 		printf '%s\n' "${_VOLDIR}"
@@ -213,7 +276,7 @@ function veracryptcreate () {
 		printf >&2 '%s: Creating keyfile %s failed\n' "${FUNCNAME[0]}" "${_KEYFILE}"
 		return 5
 	fi
-	printf -v _MKVOL 'veracrypt -t --non-interactive -c --volume-type=normal --encryption=aes --hash=sha-512 --filesystem=ext4 --pim=0 --size=%dG --keyfiles=%s --password= %s' "${VERACRYPT[VOLSIZE]}" "${_KEYFILE}" "${_VOLUME}"
+	printf -v _MKVOL 'veracrypt -t --non-interactive -c --volume-type=normal --encryption=aes --hash=sha-512 --filesystem=ext4 --pim=0 --size=%dM --keyfiles=%s --password= %s' "${VERACRYPT[VOLSIZE]}" "${_KEYFILE}" "${_VOLUME}"
 	printf '%s: %s\n' "${FUNCNAME[0]}" "${_MKVOL}"
 	${_MKVOL}
 	if [ "$?" != "0" ]; then
@@ -226,18 +289,17 @@ function veracryptcreate () {
 # veracryptrm <_PROJECT>
 # Unmount associated _VOLUME and remove _VOLUME/_KEYFILE
 function veracryptrm () {
-	local _PROJECT="${1}"
-	local _VOLDIR
-	printf -v _VOLDIR "$(veracryptgetwritablevoldir)"
-	# _VOLUME/_KEYFILE
-	local _VOLUME _KEYFILE
-	printf -v _VOLUME '%s/%s.hc' "${_VOLDIR}" "${_PROJECT}"
+	local _PROJECT="${1}" _VOLUME _KEYFILE
+	_VOLUME=$(_getVolumeByProject "${_PROJECT}")
+	if [ $? -ne 0 ]; then
+		printf '%s: No volume associated with %s\n' "${FUNCNAME[0]}" "${_PROJECT}"
+	fi
 	printf -v _KEYFILE '%s' "$(veracryptkeyfile ${_VOLUME})"
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
 		return 1
 	fi
-	veracryptunmountvolume "${_VOLUME}"
+	veracryptunmount "${_VOLUME}"
 	local _ERRNO=$?
 	if [ $_ERRNO -ne 0 ]; then
 		printf >&2 '%s: Could not unmount %s (%d)\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_ERRNO}"
@@ -261,4 +323,168 @@ function veracryptrm () {
 		esac
 	done
 	rm -v "${_FILES[@]}"
+}
+# _getVolumeByProject <_PROJECT>
+# Look in each VERACRYPT[VOLUMES] directory for volume; return path of found _VOLUME
+function _getVolumeByProject () {
+	local _PROJECT="${1}" _VOLUME
+	for _VOLDIR in ${VERACRYPT[VOLUMES]//,/ }; do
+		printf -v _VOLUME '%s/%s.hc' "${_VOLDIR}" "${_PROJECT}"
+		if [ -f "${_VOLUME}" ]; then
+			break
+		fi
+		return 1
+	done
+	printf '%s\n' "${_VOLUME}"
+}
+# _getDiskSpaceAvail
+# Find disk space available
+function _getDiskSpaceAvail () {
+	local _DIR="${1}" _AVAIL
+	printf -v _AVAIL '%s' $(df -BM --output=avail "${_DIR}" | tail -n +2)
+	if [ -z "${_AVAIL}" ]; then
+		printf >&2 '%s: Could not get size available for %s\n' "${FUNCNAME[0]}" "${_DIR}"
+		return 1
+	fi
+	printf '%d\n' "${_AVAIL%M}"
+}
+# _getDiskSpaceUsed <_DIR>
+# Find disk space used
+function _getDiskSpaceUsed () {
+	local _DIR="${1}" _USED
+	printf -v _USED '%s' $(df -BM --output=used "${_DIR}" | tail -n +2)
+	if [ -z "${_USED}" ]; then
+		printf >&2 '%s: Could not get size available for %s\n' "${FUNCNAME[0]}" "${_DIR}"
+		return 1
+	fi
+	printf '%d\n' "${_USED%M}"
+}
+# veracryptrename <_PROJECT> <_NEWNAME>
+# Rename volume
+function veracryptrename () {
+	local _PROJECT="${1}" _NEWNAME="${2}" _VOLUME _KEYFILE
+	_VOLUME=$(_getVolumeByProject "${_PROJECT}")
+	if [ $? -ne 0 ]; then
+		printf '%s: No volume associated with %s\n' "${FUNCNAME[0]}" "${_PROJECT}"
+	fi
+	printf -v _KEYFILE '%s' "$(veracryptkeyfile ${_VOLUME})"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
+		return 1
+	fi
+	veracryptunmount "${_VOLUME}"
+	local _ERRNO=$?
+	if [ $_ERRNO -ne 0 ]; then
+		printf >&2 '%s: Could not unmount %s (%d)\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_ERRNO}"
+		return 2
+	fi
+	# Until here same as veracryptrm
+	if [ "${_NEWNAME//[a-zA-Z0-9-_]}" = "${_NEWNAME}" ]; then
+		printf >&2 '%s: Need new project name\n' "${FUNCNAME[0]}"
+		return 3
+	fi
+	_NEWNAME_VOLUME="${_VOLUME%/*}/${_NEWNAME}.hc"
+	_NEWNAME_KEYFILE=$(veracryptkeyfile "${_NEWNAME_VOLUME}")
+	mv -v "${_VOLUME}" "${_NEWNAME_VOLUME}"
+	mv -v "${_KEYFILE}" "${_NEWNAME_KEYFILE}"
+}
+# veracryptshrink <_PROJECT>
+# 1. Figure out size of all files in volume associated with _PROJECT
+# 2. Create new container matching size
+# 3. Remove vol/keyfile of original _PROJECT and rename shrunken vol/keyfile to orig (optional)
+function veracryptshrink () {
+	local _PROJECT="${1}" _VOLUME _MOUNTPOINT _USED
+	local _NEWVOL_PROJECT="${1}_shrink" _NEWVOL_VOLUME _NEWVOL_MOUNTPOINT
+	_VOLUME=$(_getVolumeByProject "${_PROJECT}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: No volume associated with %s\n' "${FUNCNAME[0]}" "${_PROJECT}"
+		return 1
+	fi
+	if ! veracryptismounted "${_VOLUME}"; then
+		veracryptmount "${_VOLUME}"
+		if ! veracryptismounted "${_VOLUME}"; then
+			printf >&2 '%s: Could not mount %s\n' "${FUNCNAME[0]}" "${_VOLUME}"
+			return 2
+		fi
+	fi
+	_MOUNTPOINT=$(veracryptmountpoint "${_VOLUME}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: Could not get mountpoint for %s\n' "${FUNCNAME[0]}" "${_VOLUME}"
+		return 3
+	fi
+	_USED=$(_getDiskSpaceUsed "${_MOUNTPOINT}")
+	if [ $? -ne 0 ] || [ -z "${_USED}" ]; then
+		printf >&2 '%s: Could not get used space for %s\n' "${FUNCNAME[0]}" "${_MOUNTPOINT}"
+		return 4
+	fi
+	#printf >&2 '%s: _VOLUME=%s _MOUNTPOINT=%s _USED=%s\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_MOUNTPOINT}" "${_USED}"
+	# Sanity check
+	if [ "${_USED}" -gt "${VERACRYPT[VOLSIZE]}" ]; then
+		printf >&2 '%s: Used size greater than VERACRYPT[VOLSIZE]: _USED=%s; VERACRYPT[VOLSIZE]=%d\n' "${FUNCNAME[0]}" "${_USED}" "${VERACRYPT[VOLSIZE]}"
+		return 5
+	fi
+	# Create volume the size of used space
+	VERACRYPT[VOLSIZE]="$((${_USED}+100))"
+	veracryptcreate "${_NEWVOL_PROJECT}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: veracryptcreate failed\n' "${FUNCNAME[0]}"
+		return 6
+	fi
+	local _SIZE _NEWVOL_SIZE
+	veracryptmount "${_NEWVOL_PROJECT}"
+	_NEWVOL_VOLUME=$(_getVolumeByProject "${_NEWVOL_PROJECT}")
+	_NEWVOL_MOUNTPOINT=$(veracryptmountpoint "${_NEWVOL_VOLUME}")
+	_SIZE=$(stat -c '%s' "${_VOLUME}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: stat fail\n' "${FUNCNAME[0]}" "${_VOLUME}"
+		# Rollback
+		veracryptrm "${_NEWVOL_PROJECT}"
+		return 7
+	fi
+	_NEWVOL_SIZE=$(stat -c '%s' "${_NEWVOL_VOLUME}")
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: stat _NEWVOL_VOLUME %s fail\n' "${FUNCNAME[0]}" "${_NEWVOL_VOLUME}"
+		veracryptrm "${_NEWVOL_PROJECT}"
+		return 8
+	fi
+	if ! veracryptismounted "${_NEWVOL_VOLUME}"; then
+		printf >&2 '%s: %s not mounted\n' "${FUNCNAME[0]}" "${_NEWVOL_VOLUME}"
+		veracryptrm "${_NEWVOL_PROJECT}"
+		return 9
+	fi
+	# TODO: rsync is dependency
+	rsync -azl "${_MOUNTPOINT}" "${_NEWVOL_MOUNTPOINT}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: rsync fail\n' "${FUNCNAME[0]}"
+		veracryptrm "${_NEWVOL_PROJECT}"
+		return 10
+	fi
+	diff --no-dereference -r "${_MOUNTPOINT}" "${_NEWVOL_MOUNTPOINT}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: diff fail\n' "${FUNCNAME[0]}"
+		veracryptrm "${_NEWVOL_PROJECT}"
+		return 11
+	fi
+	printf '%s: %s=%dMB %s=%dMB (diff=%dMB)\n' "${FUNCNAME[0]}" "${_VOLUME}" "$((${_SIZE}/1024/1024))" "${_NEWVOL_VOLUME}" "$((${_NEWVOL_SIZE}/1024/1024))" $(((${_SIZE}-${_NEWVOL_SIZE})/1024/1024))
+	local _PROMPT
+	printf -v _PROMPT 'Remove %s project and rename %s to %s?' "${_PROJECT}" "${_NEWVOL_PROJECT}" "${_PROJECT}"
+	while true; do
+		read -p "${_PROMPT} " yn
+		case $yn in
+			[Yy]* ) break;;
+			[Nn]* ) return 3;;
+			* ) echo "Please answer yes or no.";;
+		esac
+	done
+	veracryptrm "${_PROJECT}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: veracryptrm fail\n' "${FUNCNAME[0]}"
+		return 12
+	fi
+	veracryptrename "${_NEWVOL_PROJECT}" "${_PROJECT}"
+	if [ $? -ne 0 ]; then
+		printf >&2 '%s: veracryptrename fail\n' "${FUNCNAME[0]}"
+		return 13
+	fi
+	veracryptmount "${_PROJECT}"
 }
