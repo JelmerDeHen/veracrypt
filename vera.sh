@@ -30,7 +30,7 @@ case "${1,,}" in
 		veracryptcreate "${2}"
 		;;
 	ls)
-		veracryptprojects
+		veracryptls
 		;;
 	*)
 		usage

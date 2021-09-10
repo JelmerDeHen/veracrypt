@@ -54,7 +54,7 @@ function veracryptprojects () {
 		REPLY="${REPLY##*/}"
 		REPLY="${REPLY%.hc}"
 		printf '%s\n' "${REPLY}"
-	done < <(veracryptvolumes)
+	done < <(veracryptvolumes) | sort
 }
 # veracryptmountall
 # Mount each _VOLUME found in ${VERACRYPT[VOLUMES]}
@@ -124,14 +124,14 @@ function _getVolume () {
 # Or mount _VOLUME
 # When _PROJECT is empty, mount all
 function veracryptmount () {
-	local _VOLUME
-	if [ -z "${1}" ]; then
+	local _PROJECT="${1}" _VOLUME
+	if [ -z "${_PROJECT}" ]; then
 		veracryptmountall
 		return $?
 	fi
-	_VOLUME=$(_getVolume "${1}")
+	_VOLUME=$(_getVolume "${_PROJECT}")
 	if [ $? -ne 0 ]; then
-		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${1}"
+		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${_PROJECT}"
 		return 1
 	fi
 	veracryptmountvolume "${_VOLUME}"
@@ -205,14 +205,14 @@ function veracryptunmountvolume () {
 }
 # veracryptunmount <_PROJECT|_VOLUME|>
 function veracryptunmount () {
-	local _VOLUME
+	local _PROJECT _VOLUME
 	if [ -z "${1}" ]; then
 		veracryptunmountall
 		return $?
 	fi
-	_VOLUME=$(_getVolume "${1}")
+	_VOLUME=$(_getVolume "${_PROJECT}")
 	if [ $? -ne 0 ]; then
-		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${1}"
+		printf >&2 '%s: %s was not a volume or project\n' "${FUNCNAME[0]}" "${_PROJECT}"
 		return 1
 	fi
 	veracryptunmountvolume "${_VOLUME}"
@@ -262,7 +262,7 @@ function veracryptcreate () {
 	# _VOLUME/_KEYFILE
 	local _VOLUME _KEYFILE
 	printf -v _VOLUME '%s/%s.hc' "${_VOLDIR}" "${_PROJECT}"
-	printf -v _KEYFILE '%s' "$(veracryptkeyfile ${_VOLUME})"
+	printf -v _KEYFILE '%s' $(veracryptkeyfile "${_VOLUME}")
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
 		return 3
@@ -307,7 +307,7 @@ function veracryptrm () {
 	if [ $? -ne 0 ]; then
 		printf '%s: No volume associated with %s\n' "${FUNCNAME[0]}" "${_PROJECT}"
 	fi
-	printf -v _KEYFILE '%s' "$(veracryptkeyfile ${_VOLUME})"
+	printf -v _KEYFILE '%s' $(veracryptkeyfile "${_VOLUME}")
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: Could not obtain keyfile "%s" for volume "%s"\n' "${FUNCNAME[0]}" "${_VOLUME}" "${_KEYFILE}"
 		return 1
@@ -472,6 +472,7 @@ function veracryptshrink () {
 		veracryptrm "${_NEWVOL_PROJECT}"
 		return 10
 	fi
+	# TODO: diff is dependency
 	diff --no-dereference -r "${_MOUNTPOINT}" "${_NEWVOL_MOUNTPOINT}"
 	if [ $? -ne 0 ]; then
 		printf >&2 '%s: diff fail\n' "${FUNCNAME[0]}"
@@ -500,4 +501,43 @@ function veracryptshrink () {
 		return 13
 	fi
 	veracryptmount "${_PROJECT}"
+}
+# veracryptls
+# Get infor about projects
+function veracryptls () {
+	local _PROJECT _VOLUME _KEYFILE _MOUNTPOINT _MOUNTED _SIZE _USED _RET
+	while read -r _PROJECT; do
+		_VOLUME=$(_getVolumeByProject "${_PROJECT}")
+		_KEYFILE=$(veracryptkeyfile "${_VOLUME}")
+		_MOUNTPOINT=$(veracryptmountpoint "${_VOLUME}")
+		veracryptismounted "${_VOLUME}" && _MOUNTED=true || _MOUNTED=false
+		_SIZE=$(($(stat -c '%s' "${_VOLUME}")/1024/1024))
+		# Check used space when volume is mounted
+		_USED=0
+		if $_MOUNTED; then
+			_USED=$(_getDiskSpaceUsed "${_MOUNTPOINT}")
+		fi
+		# TODO: jq is dependency
+		_RET+=$(jq -r -n \
+			--arg _PROJECT "${_PROJECT}" \
+			--arg _VOLUME "${_VOLUME}" \
+			--arg _KEYFILE "${_KEYFILE}" \
+			--arg _MOUNTPOINT "${_MOUNTPOINT}" \
+			--argjson _MOUNTED ${_MOUNTED} \
+			--argjson _SIZE "${_SIZE}" \
+			--argjson _USED "${_USED}" \
+			'
+			{
+				project: $_PROJECT,
+				volume: $_VOLUME,
+				keyfile: $_KEYFILE,
+				mountpoint: $_MOUNTPOINT,
+				mounted: $_MOUNTED,
+				size: $_SIZE,
+				used: $_USED
+			}
+			'
+		)
+	done < <(veracryptprojects)
+	jq -s <<<"${_RET}"
 }
